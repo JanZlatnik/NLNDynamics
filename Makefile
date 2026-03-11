@@ -63,11 +63,11 @@ $(TARGET): $(OBJS)
 build/Math.o: build/Parameters.o
 build/Green.o: build/Parameters.o  build/Math.o build/whittaker_w.o build/coulcc.o
 build/RadialSE.o: build/Parameters.o
-build/RCModel1.o: build/Parameters.o build/Math.o build/Green.o build/whittaker_w.o 
-#build/RCModel2.o: build/Parameters.o build/Math.o build/Green.o build/whittaker_w.o 
-build/VibrationalExcitation.o: build/Parameters.o build/Math.o build/Green.o build/RadialSE.o build/RCModel1.o
+#build/RCModel1.o: build/Parameters.o build/Math.o build/Green.o build/whittaker_w.o 
+build/RCModel2.o: build/Parameters.o build/Math.o build/Green.o build/whittaker_w.o 
+build/VibrationalExcitation.o: build/Parameters.o build/Math.o build/Green.o build/RadialSE.o build/RCModel2.o
 
-build/MAIN.o: build/Parameters.o build/RadialSE.o build/RCModel1.o build/VibrationalExcitation.o
+build/MAIN.o: build/Parameters.o build/RadialSE.o build/RCModel2.o build/VibrationalExcitation.o
 
 
 $(OBJ_DIR)/%.o: $(SRC_DIR)/%.f90

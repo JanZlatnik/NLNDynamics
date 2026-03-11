@@ -15,7 +15,7 @@ MODULE Green
     USE whittaker_w, only: coulomb_whittaker
     IMPLICIT NONE
     PRIVATE
-    PUBLIC :: apply_green, general_asymptotic
+    PUBLIC :: apply_green, general_asymptotic, general_free_solution
 
     REAL(KIND=idk), PARAMETER :: wronski_computation_fraction = 0.2d0
 
@@ -90,6 +90,57 @@ MODULE Green
         END IF
         
     END FUNCTION general_asymptotic
+
+
+    FUNCTION general_free_solution(x, E, m, Z, l) RESULT(val)
+        REAL(KIND=idk), INTENT(IN) :: x, E, m, Z
+        INTEGER, INTENT(IN) :: l
+        REAL(KIND=idk) :: val
+
+        REAL(KIND=idk) :: k, eta, norm_factor
+        COMPLEX(KIND=idk) :: zrho, zeta, zl_min
+        COMPLEX(KIND=idk) :: fc(1), gc(1), fcp(1), gcp(1), sig(1)
+        INTEGER :: ifail, kfn, mode
+        CHARACTER(LEN=256) :: msg
+
+        IF (E < 0.0d0) THEN
+            CALL CONSOLE('[ERROR]: Energy must be positive for free solution')
+            val = 0.0d0
+            RETURN
+        END IF
+
+        k = SQRT(2.0d0 * m * E) / hbar
+
+        IF (ABS(Z) > 1.0d-10) THEN
+            eta = -Z * m / (hbar**2 * k) 
+        ELSE
+            eta = 0.0d0
+        END IF
+
+        zrho = CMPLX(k * x, 0.0d0, KIND=idk)
+        zeta = CMPLX(eta, 0.0d0, KIND=idk)
+        zl_min = CMPLX(l, 0.0d0, KIND=idk)
+        mode = 12
+        kfn = 0
+        ifail = 0
+
+        CALL COULCC(zrho, zeta, zl_min, 1, fc, gc, fcp, gcp, sig, mode, kfn, ifail)
+
+        norm_factor = SQRT(2.0_idk * m / (pi * k * hbar**2))
+
+        val = REAL(fc(1), KIND=idk) * norm_factor
+
+        IF (.NOT. IEEE_IS_FINITE(ABS(val))) THEN
+            WRITE(msg, '(A, G0.6, A, G0.6, A)') '[ERROR] general_free_solution: Result non-finite at x=', x, ' E=', E*phys_h0, ' eV'
+            CALL CONSOLE(msg)
+        END IF
+
+        IF (val == 0.0d0) THEN
+            WRITE(msg, '(A, G0.6, A, G0.6, A)') '[ERROR] general_free_solution: Result is zero at x=', x, ' E=', E*phys_h0, ' eV'
+            CALL CONSOLE(msg)
+        END IF
+
+    END FUNCTION general_free_solution
 
 
     ! Functions to compute wronskians

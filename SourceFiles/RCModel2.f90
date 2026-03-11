@@ -15,8 +15,8 @@ MODULE RCModel2
     USE whittaker_w, ONLY: coulomb_whittaker
     IMPLICIT NONE
     PRIVATE
-    PUBLIC :: initiate_model
-    PUBLIC :: V0, Vd, g, f, F_lvlshift, delta_bg
+    PUBLIC :: initiate_model, compute_Tbg
+    PUBLIC :: V0, Vd, g, f, F_lvlshift, VLCP, GammaLCP
     PUBLIC :: mass, DS_R0
 
 
@@ -51,18 +51,26 @@ MODULE RCModel2
     CONTAINS
 
     ! DS Interaction Potentials
-    ! Potential V_2D(R)
-    REAL(KIND = idk) FUNCTION V_2D(R)
-        IMPLICIT NONE
-        REAL(KIND = idk), INTENT(IN) :: R
+    ! Potential V_2D_SHORT(R)
+    REAL(KIND = idk) FUNCTION V_2D_SR(x,R)
+        REAL(KIND = idk), INTENT(IN) :: x, R
         REAL(KIND = idk), PARAMETER :: IID_a = 0.4d0
         REAL(KIND = idk), PARAMETER :: IID_b = 2.0d0
         REAL(KIND = idk), PARAMETER :: IID_c = 1.5d0
         REAL(KIND = idk), PARAMETER :: IID_d = 0.72d0
         REAL(KIND = idk), PARAMETER :: IID_rc = 5.0d0
         REAL(KIND = idk), PARAMETER :: IID_rrc = 1.5d0
-        V_2D = - 1.0d0 / R + 0.5d0 * REAL(DS_l*(DS_l+1),KIND=idk) / R**2 + IID_a * EXP(-(R-IID_rc)**2/IID_b**2) - IID_d * EXP(-R**2/4.0d0) * TANH( (DS_R0-IID_rrc)/IID_c )
+        V_2D_SR = IID_a * EXP(-(x-IID_rc)**2/IID_b**2) - IID_d * EXP(-x**2/4.0d0) * TANH( (R-IID_rrc)/IID_c )
+    END FUNCTION V_2D_SR
+
+
+    ! Potential V_2D(R)
+    REAL(KIND = idk) FUNCTION V_2D(R)
+        IMPLICIT NONE
+        REAL(KIND = idk), INTENT(IN) :: R
+        V_2D = - DS_Z / R + 0.5d0 * REAL(DS_l*(DS_l+1),KIND=idk) / R**2 + V_2D_SR(R, DS_R0)
     END FUNCTION V_2D
+
 
     ! Potential V_2D(R)
     REAL(KIND = idk) FUNCTION V_IID_asymptotic(R)
@@ -127,6 +135,62 @@ MODULE RCModel2
     END FUNCTION Vd
 
 
+    ! LCP potential
+    REAL(KIND = idk) FUNCTION VLCP(R)
+        IMPLICIT NONE
+        REAL(KIND = idk), INTENT(IN) :: R
+
+        REAL(KIND = idk), PARAMETER :: LCP_Delta_A = 6.551393198713883d-02
+        REAL(KIND = idk), PARAMETER :: LCP_Delta_alpha = 1.031154246905986d+00
+        REAL(KIND = idk), PARAMETER :: LCP_Delta_Rc = 1.163254381883272d+00
+
+        REAL(KIND = idk) :: Delta
+
+        Delta = LCP_Delta_A * (TANH(LCP_Delta_alpha * (R - LCP_Delta_Rc)) - 1.0_idk)
+        
+        VLCP = Vd(R) + Delta
+
+    END FUNCTION VLCP
+
+
+    ! LCP width (Imaginary part)
+    REAL(KIND = idk) FUNCTION GammaLCP(R)
+        IMPLICIT NONE
+        REAL(KIND = idk), INTENT(IN) :: R
+
+        ! E_res parameters
+        REAL(KIND = idk), PARAMETER :: LCP_E_res_const = 3.989745802406164d-02
+        REAL(KIND = idk), PARAMETER :: LCP_E_res_A = -1.654452789870694d-01
+        REAL(KIND = idk), PARAMETER :: LCP_E_res_alpha = 6.912177018334650d-01
+        REAL(KIND = idk), PARAMETER :: LCP_E_res_Rc = 1.849820690923383d+00
+        REAL(KIND = idk), PARAMETER :: LCP_E_res_B = 4.488097282210504d-03
+        REAL(KIND = idk), PARAMETER :: LCP_E_res_beta = 3.206490451536629d-01
+
+        ! Gamma parameters
+        REAL(KIND = idk), PARAMETER :: LCP_Gamma_A = -7.443818187208139d-03
+        REAL(KIND = idk), PARAMETER :: LCP_Gamma_B = 7.608497664604953d-02
+        REAL(KIND = idk), PARAMETER :: LCP_Gamma_beta = 9.339636444257674d-01
+        REAL(KIND = idk), PARAMETER :: LCP_Gamma_gamma_exp = -8.520190202347913d-02
+
+        REAL(KIND = idk) :: E_res_H, E_res_eV
+
+        E_res_H = LCP_E_res_const + LCP_E_res_A * TANH(LCP_E_res_alpha * (R - LCP_E_res_Rc)) + LCP_E_res_B * EXP(-LCP_E_res_beta * R)
+
+        E_res_eV = E_res_H * phys_h0
+
+        IF (E_res_eV > 0.0_idk) THEN
+            GammaLCP = (LCP_Gamma_A + LCP_Gamma_B * EXP(-LCP_Gamma_beta * R)) * (E_res_eV**LCP_Gamma_gamma_exp)
+        ELSE
+            GammaLCP = 0.0_idk
+        END IF
+
+    END FUNCTION GammaLCP
+
+
+
+
+
+
 
     ! g(R) function
     REAL(KIND = idk) FUNCTION g(R)
@@ -185,26 +249,91 @@ MODULE RCModel2
 
 
 
-    ! background phaseshift
-    REAL(KIND = idk) FUNCTION delta_bg(e, R)
-        IMPLICIT NONE
-        REAL(KIND = idk), INTENT(IN) :: e, R
-        REAL(KIND = idk) :: E_eV
 
-        REAL(KIND = idk), PARAMETER :: bg_cE0 = -5.361604331793380d-01
-        REAL(KIND = idk), PARAMETER :: bg_cE1 = -2.647988127774039d-01
-        REAL(KIND = idk), PARAMETER :: bg_cE2 = 1.608802425974408d-02
-        REAL(KIND = idk), PARAMETER :: bg_cArctan = 1.210785915888390d-02
-        REAL(KIND = idk), PARAMETER :: bg_cEArctan = 1.712875038668730d-04
-        REAL(KIND = idk), PARAMETER :: bg_cE2Arctan = 7.150804308843176d-04
-        REAL(KIND = idk), PARAMETER :: bg_cW = 1.115440463236558d+00
-        REAL(KIND = idk), PARAMETER :: bg_Rw = 1.900120166399900d+00
-        
-        E_eV = e * phys_h0
-        
-        delta_bg = bg_cE0 + bg_cE1*E_eV + bg_cE2*(E_eV**2) + (bg_cArctan + bg_cEArctan*E_eV + bg_cE2Arctan*(E_eV**2))*ATAN(bg_cW * (R - bg_Rw))
-                
-    END FUNCTION  delta_bg
+    ! Background scattering
+    SUBROUTINE compute_Tbg(R, Ein, Eout, Tbg, phaseout)
+        REAL(KIND = idk), INTENT(IN) :: R(:), Ein, Eout
+        COMPLEX(KIND = idk), INTENT(OUT) :: Tbg(:)
+        REAL(KIND = idk), INTENT(OUT) :: phaseout
+
+        INTEGER :: i, j
+        PROCEDURE(potential_interface), POINTER :: DSV_ptr
+        REAL(KIND = idk), ALLOCATABLE :: freestate_in(:), freestate_out(:)
+        REAL(KIND = idk), ALLOCATABLE :: mat(:,:)
+        COMPLEX(KIND = idk), ALLOCATABLE :: greened_mat(:,:), green_dstate(:), scattered_state(:)
+        COMPLEX(KIND = idk), ALLOCATABLE :: phi_bg_R0(:), integrand(:), tmp_vec(:)
+        COMPLEX(KIND = idk) :: greendot, scattdot, Vde_out_R0
+        COMPLEX(KIND = idk) :: term1, term2, term2_base
+        REAL(KIND = idk) :: R_val
+
+        IF (Eout <= 0.0d0) THEN
+            Tbg = (0.0d0, 0.0d0)
+            phaseout = 0.0d0
+            RETURN
+        END IF
+
+        ALLOCATE(freestate_in(DS_mp), freestate_out(DS_mp))
+        ALLOCATE(mat(2,DS_mp), greened_mat(2,DS_mp))
+
+        DO i = 1, DS_mp
+            freestate_in(i)  = general_free_solution(DS_x(i), Ein, DS_mass, DS_Z, DS_l)
+            freestate_out(i) = general_free_solution(DS_x(i), Eout, DS_mass, DS_Z, DS_l)
+            mat(2,i) = freestate_out(i) * V_2D_SR(DS_x(i), DS_R0)
+        END DO
+        mat(1,:) = DS_dstate(:)
+
+        DSV_ptr => V_2D
+        CALL apply_green(DS_x, Eout, DS_mass, DS_Z, DS_l, DSV_ptr, mat, greened_mat)
+        DEALLOCATE(mat)
+
+        ALLOCATE(green_dstate(DS_mp), scattered_state(DS_mp), tmp_vec(DS_mp))
+        DO i = 1, DS_mp
+            green_dstate(i) = greened_mat(1,i) * DS_dstate(i)
+        END DO
+        CALL definite_integral(green_dstate, DS_dx, greendot)
+        greendot = 1.0d0 / greendot
+        DEALLOCATE(green_dstate)
+
+        scattered_state = freestate_out + greened_mat(2,:)
+        DEALLOCATE(freestate_out)
+        DO i = 1, DS_mp
+            tmp_vec(i) = scattered_state(i) * DS_dstate(i)
+        END DO
+        CALL definite_integral(tmp_vec, DS_dx, scattdot)
+
+        Vde_out_R0 = scattdot * greendot
+        phaseout = ATAN2(AIMAG(Vde_out_R0), REAL(Vde_out_R0))
+
+        ALLOCATE(phi_bg_R0(DS_mp))
+        DO i = 1, DS_mp
+            phi_bg_R0(i) = scattered_state(i) - Vde_out_R0 * greened_mat(1,i)
+        END DO
+        DEALLOCATE(greened_mat, scattered_state)
+
+        DO i = 1, DS_mp
+            tmp_vec(i) = DS_dstate(i) * freestate_in(i)
+        END DO
+        CALL definite_integral(tmp_vec, DS_dx, term2_base)
+        DEALLOCATE(tmp_vec)
+
+        ALLOCATE(integrand(DS_mp))
+        DO j = 1, SIZE(R)
+            R_val = R(j)
+
+            DO i = 1, DS_mp
+                integrand(i) = phi_bg_R0(i) * V_2D_SR(DS_x(i),R_val) * freestate_in(i)
+            END DO
+            CALL definite_integral(integrand, DS_dx, term1)
+
+            term2 = Vde_out_R0 * g(R_val) * term2_base
+
+            Tbg(j) = term1 - term2
+        END DO
+
+        DEALLOCATE(freestate_in, phi_bg_R0, integrand)
+
+
+    END SUBROUTINE compute_Tbg
 
 
 

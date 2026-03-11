@@ -12,7 +12,7 @@ PROGRAM MAIN
     USE Parameters
     USE RadialSE
     USE VibrationalExcitation
-    USE RCModel1
+    USE RCModel2
     USE OMP_LIB
 
     IMPLICIT NONE
@@ -23,7 +23,7 @@ PROGRAM MAIN
     INTEGER :: iounit
 
     REAL(KIND = idk), ALLOCATABLE :: eigE_V(:), eigF_V(:,:), FeigF_V(:,:)
-    REAL(KIND = idk), ALLOCATABLE :: cs_VE(:,:), cs_VE_tot(:), cs_DR(:), cs_DR_wave(:), cs_DR_opt(:)
+    REAL(KIND = idk), ALLOCATABLE :: cs_VE(:,:), cs_VE_tot(:), cs_VE_bg(:,:), cs_VE_tot_bg(:), cs_DR(:), cs_DR_wave(:), cs_DR_opt(:)
 
 
 
@@ -43,25 +43,16 @@ PROGRAM MAIN
         END FUNCTION complex_function_interface
     END INTERFACE
 
-    ! Interface for RxR->R function
-    ABSTRACT INTERFACE
-        REAL(KIND = KIND(1.d0)) FUNCTION real_2d_interface(e, R)
-            IMPLICIT NONE
-            REAL(KIND = KIND(1.d0)), INTENT(IN) :: e, R
-        END FUNCTION real_2d_interface
-    END INTERFACE
 
-
-    PROCEDURE(real_function_interface), POINTER :: V0_ptr, Vd_ptr, g_ptr, f_ptr
+    PROCEDURE(real_function_interface), POINTER :: V0_ptr, Vd_ptr, g_ptr, f_ptr, VLCP_ptr
     PROCEDURE(complex_function_interface), POINTER :: Flvlshift_ptr
-    PROCEDURE(real_2d_interface), POINTER :: deltabg_ptr
 
     V0_ptr => V0
     Vd_ptr => Vd
+    VLCP_ptr => VLCP
     g_ptr => g
     f_ptr => f
     Flvlshift_ptr => F_lvlshift
-    deltabg_ptr => delta_bg
 
 
 
@@ -118,7 +109,7 @@ PROGRAM MAIN
 
         ! Printing V0(x) to file
         OPEN(NEWUNIT=iounit, FILE='MODEL/V0.txt', STATUS='replace', ACTION='write')
-        WRITE(iounit, '(A3, A17, A21)', advance='no') '#', 'R [a0]','V0(R) [eV]'
+        WRITE(iounit, '(A3, A17, A20)') '#', 'R [a0]','V0(R) [eV]'
         WRITE(iounit,*)
         DO i = 1, SIZE(Rgrid)
             WRITE(iounit, '(1E20.12)', advance='no') Rgrid(i)
@@ -130,7 +121,7 @@ PROGRAM MAIN
 
         ! Printing Vd(x) to file
         OPEN(NEWUNIT=iounit, FILE='MODEL/Vd.txt', STATUS='replace', ACTION='write')
-        WRITE(iounit, '(A3, A17, A21)', advance='no') '#', 'R [a0]','Vd(R) [eV]'
+        WRITE(iounit, '(A3, A17, A20)') '#', 'R [a0]','Vd(R) [eV]'
         WRITE(iounit,*)
         DO i = 1, SIZE(Rgrid)
             WRITE(iounit, '(1E20.12)', advance='no') Rgrid(i)
@@ -140,9 +131,22 @@ PROGRAM MAIN
         CLOSE(iounit)
         CALL CONSOLE('Data successfully written to MODEL/Vd.txt')
 
+        ! Printing VLPC(x) to file
+        OPEN(NEWUNIT=iounit, FILE='MODEL/VLCP.txt', STATUS='replace', ACTION='write')
+        WRITE(iounit, '(A3, A17, A20, A20)') '#', 'R [a0]','VLCP(R) [eV]','GammaLCP(R) [eV]'
+        WRITE(iounit,*)
+        DO i = 1, SIZE(Rgrid)
+            WRITE(iounit, '(1E20.12)', advance='no') Rgrid(i)
+            WRITE(iounit, '(1E20.12)', advance='no') VLCP(Rgrid(i)) * phys_h0
+            WRITE(iounit, '(1E20.12)', advance='no') GammaLCP(Rgrid(i)) * phys_h0
+            WRITE(iounit,*)
+        END DO
+        CLOSE(iounit)
+        CALL CONSOLE('Data successfully written to MODEL/VLCP.txt')
+
         ! Printing g(x) to file
         OPEN(NEWUNIT=iounit, FILE='MODEL/g.txt', STATUS='replace', ACTION='write')
-        WRITE(iounit, '(A3, A17, A21)', advance='no') '#', 'R [a0]','g(R) [a.u.]'
+        WRITE(iounit, '(A3, A17, A20)') '#', 'R [a0]','g(R) [a.u.]'
         WRITE(iounit,*)
         DO i = 1, SIZE(Rgrid)
             WRITE(iounit, '(1E20.12)', advance='no') Rgrid(i)
@@ -164,7 +168,7 @@ PROGRAM MAIN
 
         ! Printing Delta(E,R) to file
         OPEN(NEWUNIT=iounit, FILE='MODEL/delta.txt', STATUS='replace', ACTION='write')
-        WRITE(iounit, '(A3, A17, A21)', advance='no') '#', 'E [eV]', 'Delta(R,E) [eV] ...'
+        WRITE(iounit, '(A3, A17, A20)') '#', 'E [eV]', 'Delta(R,E) [eV] ...'
         WRITE(iounit,*)
         DO i = 1, SIZE(EModelgrid)
             WRITE(iounit, '(1E20.12)', advance='no') EModelgrid(i) * phys_h0
@@ -178,7 +182,7 @@ PROGRAM MAIN
 
         ! Printing Gamma(E,R) to file
         OPEN(NEWUNIT=iounit, FILE='MODEL/gamma.txt', STATUS='replace', ACTION='write')
-        WRITE(iounit, '(A3, A17, A)', advance='no') '#', 'E [eV]', 'Gamma(R,E) [eV] ...'
+        WRITE(iounit, '(A3, A17, A)') '#', 'E [eV]', 'Gamma(R,E) [eV] ...'
         WRITE(iounit,*)
         DO i = 1, SIZE(EModelgrid)
             WRITE(iounit, '(1E20.12)', advance='no') EModelgrid(i) * phys_h0
@@ -205,7 +209,7 @@ PROGRAM MAIN
         CALL CONSOLE('Eigenstates in V0 potential computed successfully.')
         
         OPEN(NEWUNIT=iounit, FILE='MODEL/V0_eigE.txt', STATUS='replace', ACTION='write')
-        WRITE(iounit, '(A1, A2, A21)') '#', 'n', 'E_n [eV]'
+        WRITE(iounit, '(A1, A2, A20)') '#', 'n', 'E_n [eV]'
         DO i = 1, n_FDVR
             WRITE(iounit, '(I0)', advance='no') i
             WRITE(iounit, '(1E20.12)', advance='no') eigE_V(i)*phys_h0
@@ -231,6 +235,80 @@ PROGRAM MAIN
         IF (ALLOCATED(eigF_V)) DEALLOCATE(eigF_V)
 
 
+        ! Calculation of eigenstates in Vd(x)
+        CALL CONSOLE('Computing eigenstates in Vd potential...')
+        IF (ALLOCATED(eigE_V)) DEALLOCATE(eigE_V)
+        IF (ALLOCATED(eigF_V)) DEALLOCATE(eigF_V)
+        IF (ALLOCATED(FeigF_V)) DEALLOCATE(FeigF_V)
+        CALL Four_DVR(Rmin, Rmax, Vd_ptr, mass, n_fdvr, n_fdvr, eigE_V, FeigF_V)
+        CALL Inverse_F(Rgrid, FeigF_V, eigF_V)
+        IF (ALLOCATED(FeigF_V)) DEALLOCATE(FeigF_V)
+        CALL CONSOLE('Eigenstates in Vd potential computed successfully.')
+        
+        OPEN(NEWUNIT=iounit, FILE='MODEL/Vd_eigE.txt', STATUS='replace', ACTION='write')
+        WRITE(iounit, '(A1, A2, A20)') '#', 'n', 'E_n [eV]'
+        DO i = 1, n_FDVR
+            WRITE(iounit, '(I0)', advance='no') i
+            WRITE(iounit, '(1E20.12)', advance='no') eigE_V(i)*phys_h0
+            WRITE(iounit,*)
+        END DO
+        CLOSE(iounit)
+        CALL CONSOLE('Data successfully written to MODEL/Vd_eigE.txt')
+        
+        OPEN(NEWUNIT=iounit, FILE='MODEL/Vd_eigF.txt', STATUS='replace', ACTION='write')    
+        WRITE(iounit, '(A3, A17, A)') '#', 'R [a0]', 'nu_i [u.a.]'
+
+        DO j = 1, SIZE(Rgrid)
+            WRITE(iounit, '(1E20.12)', advance='no') Rgrid(j)
+            DO i = 1, n_print+1
+                WRITE(iounit, '(1E20.12)', advance='no') eigF_V(i,j)
+            END DO
+            WRITE(iounit,*) 
+        END DO
+        CLOSE(iounit)
+        CALL CONSOLE('Data successfully written to MODEL/Vd_eigF.txt')
+        
+        IF (ALLOCATED(eigE_V)) DEALLOCATE(eigE_V)
+        IF (ALLOCATED(eigF_V)) DEALLOCATE(eigF_V)
+
+        
+        ! Calculation of eigenstates in VLCP(x)
+        CALL CONSOLE('Computing eigenstates in VLCP potential...')
+        IF (ALLOCATED(eigE_V)) DEALLOCATE(eigE_V)
+        IF (ALLOCATED(eigF_V)) DEALLOCATE(eigF_V)
+        IF (ALLOCATED(FeigF_V)) DEALLOCATE(FeigF_V)
+        CALL Four_DVR(Rmin, Rmax, VLCP_ptr, mass, n_fdvr, n_fdvr, eigE_V, FeigF_V)
+        CALL Inverse_F(Rgrid, FeigF_V, eigF_V)
+        IF (ALLOCATED(FeigF_V)) DEALLOCATE(FeigF_V)
+        CALL CONSOLE('Eigenstates in VLCP potential computed successfully.')
+        
+        OPEN(NEWUNIT=iounit, FILE='MODEL/VLCP_eigE.txt', STATUS='replace', ACTION='write')
+        WRITE(iounit, '(A1, A2, A20)') '#', 'n', 'E_n [eV]'
+        DO i = 1, n_FDVR
+            WRITE(iounit, '(I0)', advance='no') i
+            WRITE(iounit, '(1E20.12)', advance='no') eigE_V(i)*phys_h0
+            WRITE(iounit,*)
+        END DO
+        CLOSE(iounit)
+        CALL CONSOLE('Data successfully written to MODEL/VLCP_eigE.txt')
+        
+        OPEN(NEWUNIT=iounit, FILE='MODEL/VLCP_eigF.txt', STATUS='replace', ACTION='write')    
+        WRITE(iounit, '(A3, A17, A)') '#', 'R [a0]', 'nu_i [u.a.]'
+
+        DO j = 1, SIZE(Rgrid)
+            WRITE(iounit, '(1E20.12)', advance='no') Rgrid(j)
+            DO i = 1, n_print+1
+                WRITE(iounit, '(1E20.12)', advance='no') eigF_V(i,j)
+            END DO
+            WRITE(iounit,*) 
+        END DO
+        CLOSE(iounit)
+        CALL CONSOLE('Data successfully written to MODEL/VLCP_eigF.txt')
+        
+        IF (ALLOCATED(eigE_V)) DEALLOCATE(eigE_V)
+        IF (ALLOCATED(eigF_V)) DEALLOCATE(eigF_V)
+
+
     END IF
 
 
@@ -239,11 +317,11 @@ PROGRAM MAIN
     !=================================================================================
     IF (VE_computation) THEN
         CALL CONSOLE('Running computation of VE & DA/DR...')
-        CALL vib_exc(Rgrid, Egrid, mass, V0_ptr, n_fdvr, Vd_ptr, 0, n_eig, g_ptr, f_ptr, Flvlshift_ptr, deltabg_ptr, cs_VE, cs_VE_tot, cs_DR, cs_DR_wave, cs_DR_opt)
+        CALL vib_exc(Rgrid, Egrid, mass, V0_ptr, n_fdvr, Vd_ptr, 0, n_eig, g_ptr, f_ptr, Flvlshift_ptr, cs_VE, cs_VE_bg, cs_VE_tot, cs_VE_tot_bg, cs_DR, cs_DR_wave, cs_DR_opt)
         CALL CONSOLE('Computation of VE & DA/DR successfully finished.')
 
         OPEN(NEWUNIT=iounit, FILE='DATA/cs_VE.txt', STATUS='replace', ACTION='write')
-        WRITE(iounit, '(A3, A17, A)', advance='no') '#', 'e [eV]', 'cs_VE [au] ...'
+        WRITE(iounit, '(A3, A17, A)') '#', 'e [eV]', 'cs_VE [au] ...'
         DO j = 1, SIZE(Egrid)
             WRITE(iounit, '(1E20.12)', advance='no') Egrid(j) * phys_h0
             DO i = 1, n_print+1
@@ -255,11 +333,25 @@ PROGRAM MAIN
         CALL CONSOLE('Data successfully written to DATA/cs_VE.txt')
 
         
+        OPEN(NEWUNIT=iounit, FILE='DATA/cs_VE_bg.txt', STATUS='replace', ACTION='write')
+        WRITE(iounit, '(A3, A17, A)') '#', 'e [eV]', 'cs_VE_bg [au] ...'
+        DO j = 1, SIZE(Egrid)
+            WRITE(iounit, '(1E20.12)', advance='no') Egrid(j) * phys_h0
+            DO i = 1, n_print+1
+                WRITE(iounit, '(1E20.12)', advance='no') cs_VE_bg(j,i)
+            END DO
+            WRITE(iounit,*)
+        END DO
+        CLOSE(iounit)
+        CALL CONSOLE('Data successfully written to DATA/cs_VE_bg.txt')
+
+        
         OPEN(NEWUNIT=iounit, FILE='DATA/cs_VE_tot.txt', STATUS='replace', ACTION='write')
-        WRITE(iounit, '(A3, A17, A)', advance='no') '#', 'e [eV]', 'cs_VE_tot [au]'
+        WRITE(iounit, '(A3, A17, A20, A20)') '#', 'e [eV]', 'cs_VE_tot [au]', 'cs_VE_tot_bg [au]'
         DO j = 1, SIZE(Egrid)
             WRITE(iounit, '(1E20.12)', advance='no') Egrid(j) * phys_h0
             WRITE(iounit, '(1E20.12)', advance='no') cs_VE_tot(j)
+            WRITE(iounit, '(1E20.12)', advance='no') cs_VE_tot_bg(j)
             WRITE(iounit,*)
         END DO
         CLOSE(iounit)
@@ -267,7 +359,7 @@ PROGRAM MAIN
 
         
         OPEN(NEWUNIT=iounit, FILE='DATA/cs_DR.txt', STATUS='replace', ACTION='write')
-        WRITE(iounit, '(A3, A17, A20, A20, A20)', advance='no') '#', 'e [eV]', 'cs_DR [au]', 'cs_DR_wave [au]', 'cs_DR_opt [au]'
+        WRITE(iounit, '(A3, A17, A20, A20, A20)') '#', 'e [eV]', 'cs_DR [au]', 'cs_DR_wave [au]', 'cs_DR_opt [au]'
         DO j = 1, SIZE(Egrid)
             WRITE(iounit, '(1E20.12)', advance='no') Egrid(j) * phys_h0
             WRITE(iounit, '(1E20.12)', advance='no') cs_DR(j)
@@ -280,6 +372,8 @@ PROGRAM MAIN
 
         IF(ALLOCATED(cs_VE)) DEALLOCATE(cs_VE)
         IF(ALLOCATED(cs_VE_tot)) DEALLOCATE(cs_VE_tot)
+        IF(ALLOCATED(cs_VE_bg)) DEALLOCATE(cs_VE_bg)
+        IF(ALLOCATED(cs_VE_tot_bg)) DEALLOCATE(cs_VE_tot_bg)
         IF(ALLOCATED(cs_DR)) DEALLOCATE(cs_DR)
         IF(ALLOCATED(cs_DR_wave)) DEALLOCATE(cs_DR_wave)
         IF(ALLOCATED(cs_DR_opt)) DEALLOCATE(cs_DR_opt)

@@ -12,7 +12,7 @@ MODULE VibrationalExcitation
     USE RadialSE
     USE Green
     USE OMP_LIB
-    USE RCModel1, ONLY : DS_R0
+    USE RCModel2, ONLY : DS_R0, compute_Tbg
     IMPLICIT NONE
     PRIVATE
     PUBLIC :: vib_exc
@@ -33,20 +33,12 @@ MODULE VibrationalExcitation
         END FUNCTION complex_ve_interface
     END INTERFACE
 
-    ! Abstract interface for real->complex functions
-    ABSTRACT INTERFACE
-        REAL(KIND = KIND(1.d0)) FUNCTION real_2d_ve_interface(x,y)
-            IMPLICIT NONE
-            REAL(KIND = KIND(1.d0)), INTENT(IN) :: x, y
-        END FUNCTION real_2d_ve_interface
-    END INTERFACE
-
 
     
     CONTAINS
     
     ! Subroutine that calculates cross sections of vibrational exitation for multiple given (as a field) energy of the incoming electron using F_eig
-    SUBROUTINE vib_exc(x_mesh,e_i,mass,ground_pot,N_Four,exc_pot,in_state,n_states,g_Vde,f_Vde,F_trans,delta_bg,cs_VE,cs_VE_tot,cs_DA,cs_DA_infty,cs_DA_inel)
+    SUBROUTINE vib_exc(x_mesh,e_i,mass,ground_pot,N_Four,exc_pot,in_state,n_states,g_Vde,f_Vde,F_trans,cs_VE,cs_VE_bg,cs_VE_tot,cs_VE_tot_bg,cs_DA,cs_DA_infty,cs_DA_inel)
         ! x_mesh        -   interval (xmin,xmax) as a mesh in [au]
         ! e_i           -   vector of energies of the incoming electron in [au]
         ! mass          -   mass of the molecule in [au]
@@ -58,9 +50,7 @@ MODULE VibrationalExcitation
         ! g_Vde         -   R->R function - radial component of the V_de
         ! f_Vde         -   R->R function - energy component of the V_de
         ! F_trans       -   R->C function - transform of the energy component of the V_de - F(e)
-        ! delta_bg      -   RxR->R function - background scattering  phaseshift
         ! cs_VE         -   cross sections for all final states
-        ! cs_VE_res     -   resonant only cross sections for all final states
         ! cs_DA         -   cross sections for disociative attachment
         ! cs_DA_infty   -   cross sections for disociative attachment using magnitude of wavefunction at infinity
         ! cs_DA_inel    -   cross sections for disociative attachment using cs_DA = cs_Inel - cs_VE
@@ -69,14 +59,13 @@ MODULE VibrationalExcitation
         INTEGER, INTENT(IN) :: in_state, n_states, N_Four
         PROCEDURE(real_ve_interface), POINTER, INTENT(IN) :: exc_pot, g_Vde, f_Vde, ground_pot
         PROCEDURE(complex_ve_interface), POINTER, INTENT(IN) :: F_trans
-        PROCEDURE(real_2d_ve_interface), POINTER, INTENT(IN) :: delta_bg
-        REAL(KIND = idk), ALLOCATABLE, INTENT(OUT) :: cs_VE(:,:), cs_VE_tot(:), cs_DA(:), cs_DA_infty(:), cs_DA_inel(:)
+        REAL(KIND = idk), ALLOCATABLE, INTENT(OUT) :: cs_VE(:,:), cs_VE_tot(:), cs_VE_bg(:,:), cs_VE_tot_bg(:), cs_DA(:), cs_DA_infty(:), cs_DA_inel(:)
         REAL(KIND = idk), ALLOCATABLE :: E_nu(:), Fnu(:,:), nu(:,:), gnu(:,:), fVec(:), Kfree(:), Kpot(:)
         COMPLEX(KIND = idk), ALLOCATABLE :: greenedgnu(:,:), G_matrix(:,:), auxVec(:), F_matrix(:,:), rhsVec(:), coeff_matrix(:,:), T_VEaux(:), Kprop(:)
         COMPLEX(KIND = idk) :: T_DAaux, auxnum
-        REAL(KIND = idk) :: cs_VE_res_only, cs_VE_tot_res, E_out, E_eff
-        COMPLEX(KIND = idk) :: T_res, T_bg_vib, T_total, T_bg
-        COMPLEX(KIND = idk), ALLOCATABLE :: bg_integrand(:)
+        REAL(KIND = idk) ::  E_out, delta_in, delta_out
+        COMPLEX(KIND = idk) :: T_res, T_total, T_bg_vib
+        COMPLEX(KIND = idk), ALLOCATABLE :: T_bg(:)
         INTEGER :: n_mesh
         REAL(KIND = idk) :: dx, E_nui, K_vec
         REAL(KIND = idk) :: V_inf
@@ -110,13 +99,15 @@ MODULE VibrationalExcitation
         
         ALLOCATE(cs_VE(SIZE(e_i),n_states))
         ALLOCATE(cs_VE_tot(SIZE(e_i)))
+        ALLOCATE(cs_VE_bg(SIZE(e_i),n_states))
+        ALLOCATE(cs_VE_tot_bg(SIZE(e_i)))
         ALLOCATE(cs_DA(SIZE(e_i)))
         ALLOCATE(cs_DA_infty(SIZE(e_i)))
         ALLOCATE(cs_DA_inel(SIZE(e_i)))
 
         
         !$OMP PARALLEL DEFAULT(SHARED) PRIVATE(l, greenedgnu, G_matrix, auxVec, F_matrix, rhsVec, coeff_matrix, T_VEaux, Kprop, T_DAaux, auxnum, nr_inf, i, j, k, &
-        !$OMP full_message, cs_VE_res_only, cs_VE_tot_res, Kfree, Kpot, fVec, K_vec, T_res, T_bg_vib, T_total, bg_integrand, E_out, E_eff, T_bg)
+        !$OMP full_message, Kfree, Kpot, fVec, K_vec, T_res, T_total, E_out, T_bg, T_bg_vib, delta_in, delta_out)
         !$OMP DO SCHEDULE(STATIC)
         DO l = 1, SIZE(e_i)
 
@@ -163,34 +154,31 @@ MODULE VibrationalExcitation
         
             DEALLOCATE(coeff_matrix,rhsVec)
             
-            ALLOCATE(bg_integrand(n_mesh))
             cs_VE_tot(l) = 0.0d0
-            cs_VE_tot_res = 0.0d0
+            cs_VE_tot_bg(l) = 0.0d0
             
+            ALLOCATE(T_bg(n_mesh))
+            CALL compute_Tbg(x_mesh, e_i(l), e_i(l), T_bg, delta_in)
             DO i = 1, n_states
                 E_out = E_cons(l) - E_nu(i)
                 T_res = T_VEaux(i) * f_Vde(E_cons(l) - E_nu(i))
                 
-                IF (E_out > 0.0d0) THEN
-                    E_eff = SQRT(e_i(l) * E_out)
-                    DO k = 1, n_mesh
-                        T_bg = -(1.0d0 / pi) * EXP(CMPLX(0.0d0, delta_bg(E_eff, x_mesh(k)), KIND=idk)) * SIN(delta_bg(E_out, x_mesh(k)))
-                        bg_integrand(k) = nu(i,k) * T_bg * nu(i_state,k)
-                    END DO
-                    CALL definite_integral(bg_integrand, dx, T_bg_vib)
-                ELSE
-                    T_bg_vib = (0.0d0, 0.0d0)
-                END IF
+                CALL compute_Tbg(x_mesh, e_i(l), E_out, T_bg, delta_out)
+
+                DO j = 1, n_mesh
+                    T_bg(j) = T_bg(j) * nu(i_state,j) * nu(i,j)
+                END DO
+                CALL definite_integral(T_bg, dx, T_bg_vib)
                 
-                T_total = T_res * EXP(CMPLX(0.0d0, delta_bg(E_out,DS_R0) + delta_bg(e_i(l),DS_R0), KIND=idk)) + T_bg_vib
+                T_total = T_res * EXP(CMPLX(0.0d0, -(delta_out + delta_in), KIND=idk)) + T_bg_vib
                 
-                cs_VE_res_only = 2.0d0 * PI**3 * (ABS(T_res))**2 / e_i(l)
-                cs_VE_tot_res = cs_VE_tot_res + cs_VE_res_only
+                cs_VE(l,i) = 2.0d0 * PI**3 * (ABS(T_res))**2 / e_i(l)
+                cs_VE_tot(l)= cs_VE_tot(l) + cs_VE(l,i) 
                 
-                cs_VE(l,i) = 2.0d0 * PI**3 * (ABS(T_total))**2 / e_i(l)
-                cs_VE_tot(l) = cs_VE_tot(l) + cs_VE(l,i) 
+                cs_VE_bg(l,i) = 2.0d0 * PI**3 * (ABS(T_total))**2 / e_i(l)
+                cs_VE_tot_bg(l) = cs_VE_tot_bg(l) + cs_VE_bg(l,i) 
             END DO
-            DEALLOCATE(bg_integrand)
+            DEALLOCATE(T_bg)
             
             
             IF (E_cons(l) > V_inf) THEN 
@@ -240,7 +228,7 @@ MODULE VibrationalExcitation
                 
                 DEALLOCATE(auxVec,Kprop)
                 
-                cs_DA_inel(l) = -2.0d0 * PI**2 / e_i(l)  * AIMAG(T_VEaux(i_state)*f_Vde(E_cons(l)-E_nui)) - cs_VE_tot_res
+                cs_DA_inel(l) = -2.0d0 * PI**2 / e_i(l)  * AIMAG(T_VEaux(i_state)*f_Vde(E_cons(l)-E_nui)) - cs_VE_tot(l)
                 
             ELSE 
                 cs_DA(l) = 0.0d0
